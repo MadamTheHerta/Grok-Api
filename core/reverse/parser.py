@@ -81,14 +81,23 @@ class Parser:
         for index in Parser.grok_mapping:
             if index.get("action_script") in scripts:
                 return index["actions"], index["xsid_script"]
-            
+
+        # FIX: initialize variables before the loop to avoid UnboundLocalError
+        script_content1: str = ""
+        script_content2: str = ""
+        action_script: str = ""
+
         for script in scripts:
             content: str = requests.get(f'https://grok.com{script}', impersonate="chrome136").text
             if "anonPrivateKey" in content:
-                script_content1: str = content
-                action_script: str = script
+                script_content1 = content
+                action_script = script
             elif "880932)" in content:
-                script_content2: str = content
+                script_content2 = content
+
+        if not script_content1 or not script_content2:
+            print("Could not find required scripts — Grok may have updated their site.")
+            return [], ""
 
         actions: list = findall(r'createServerReference\)\("([a-f0-9]+)"', script_content1)
         xsid_script: str = search(r'"(static/chunks/[^"]+\.js)"[^}]*?\(880932\)', script_content2).group(1)
@@ -106,5 +115,4 @@ class Parser:
             return actions, xsid_script
         else:
             print("Something went wrong while parsing script and actions")
-        
-        
+            return [], ""
