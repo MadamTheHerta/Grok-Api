@@ -1,57 +1,101 @@
-from fastapi      import FastAPI, HTTPException
-from urllib.parse import urlparse, ParseResult
-from pydantic     import BaseModel
-from core         import Grok
-from uvicorn      import run
+"""
+Grok API Server - Improved & Clean Version
+Based on: https://github.com/realasfngl/Grok-Api
+Improvements: CORS support, better error handling, health check, cleaner code
+"""
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from core import Grok
+
+app = FastAPI(
+    title="Grok API Wrapper",
+    description="Free Grok API wrapper - no account needed",
+    version="1.0.0"
+)
+
+# Allow all origins so the web UI can connect from any host
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-app = FastAPI()
-
-class ConversationRequest(BaseModel):
-    proxy: str
+class AskRequest(BaseModel):
     message: str
-    model: str = "grok-3-auto"
-    extra_data: dict = None
+    model: Optional[str] = "grok-3-fast"
+    proxy: Optional[str] = None
+    extra_data: Optional[dict] = None
 
-def format_proxy(proxy: str) -> str:
-    
-    if not proxy.startswith(("http://", "https://")):
-        proxy: str = "http://" + proxy
-    
+
+class AskResponse(BaseModel):
+    status: str
+    response: str
+    stream_response: list
+    images: Optional[list]
+    extra_data: Optional[dict]
+
+
+@app.get("/")
+def root():
+    return {
+        "status": "online",
+        "message": "Grok API Wrapper is running",
+        "endpoints": ["/ask", "/health", "/models"]
+    }
+
+
+@app.get("/health")
+def health():
+    """Health check endpoint for Railway / uptime monitors"""
+    return {"status": "ok"}
+
+
+@app.get("/models")
+def models():
+    """List available Grok models"""
+    return {
+        "models": [
+            {"id": "grok-3-auto",               "description": "Automatic mode"},
+            {"id": "grok-3-fast",               "description": "Fast processing (recommended)"},
+            {"id": "grok-4",                    "description": "Expert mode"},
+            {"id": "grok-4-mini-thinking-tahoe","description": "Mini thinking mode"},
+        ]
+    }
+
+
+@app.post("/ask", response_model=AskResponse)
+def ask(req: AskRequest):
+    """
+    Send a message to Grok.
+    - First message: leave extra_data as null
+    - Follow-up messages: pass the extra_data returned from the previous response
+    """
     try:
-        parsed: ParseResult = urlparse(proxy)
-
-        if parsed.scheme not in ("http", ""):
-            raise ValueError("Not http scheme")
-
-        if not parsed.hostname or not parsed.port:
-            raise ValueError("No url and port")
-
-        if parsed.username and parsed.password:
-            return f"http://{parsed.username}:{parsed.password}@{parsed.hostname}:{parsed.port}"
-        
-        else:
-            return f"http://{parsed.hostname}:{parsed.port}"
-    
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"Invalid proxy format: {str(e)}")
-
-@app.post("/ask")
-async def create_conversation(request: ConversationRequest):
-    if not request.proxy or not request.message:
-        raise HTTPException(status_code=400, detail="Proxy and message are required")
-    
-    proxy = format_proxy(request.proxy)
-    
-    try:
-        answer: dict = Grok(request.model, proxy).start_convo(request.message, request.extra_data)
-
+        grok = Grok(req.model, req.proxy)
+        result = grok.start_convo(req.message, extra_data=req.extra_data)
         return {
             "status": "success",
-            **answer
+            "response": result.get("response", ""),
+            "stream_response": result.get("stream_response", []),
+            "images": result.get("images"),
+            "extra_data": result.get("extra_data"),
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 if __name__ == "__main__":
-    run("api_server:app", host="0.0.0.0", port=6969, workers=50)
+    uvicorn.run(
+        "api_server:app",
+        host="0.0.0.0",
+        port=int(__import__("os").environ.get("PORT", 6969)),
+        workers=4,
+        log_level="info"
+    )
